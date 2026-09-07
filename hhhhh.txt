@@ -1,0 +1,658 @@
+{
+  "name": "HireFlow AI - AI Intelligence Module",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "f4164f47-55f3-4968-83df-89a1ea258ccc",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      candidate_name: \"Demo Candidate\",\n      email: \"candidate@example.com\",\n      resume_text: \"I am an AI Automation Engineer with 6 years of professional experience in Python, n8n, APIs, AI Automation, and JavaScript. I have extensive experience designing and building AI-powered automation workflows and enterprise integrations. I hold a Master's degree in Artificial Intelligence and have successfully delivered multiple automation projects using n8n, Python, APIs, and machine learning.\",\n      job_title: \"AI Automation Engineer\",\n      job_requirements: [\"Python\", \"n8n\", \"APIs\", \"AI Automation\", \"JavaScript\"]\n    }\n  }\n];"
+      },
+      "id": "9c8f62cc-0209-4202-8c4f-34f1923af3a9",
+      "name": "Input Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst candidate_name = input.candidate_name || \"\";\nconst email = input.email || \"\";\nconst resume_text = input.resume_text || \"\";\nconst job_title = input.job_title || \"\";\nconst job_requirements = Array.isArray(input.job_requirements) ? input.job_requirements : [];\n\nconst geminiPrompt = `You are an expert technical recruiter and resume analyst.\n\nAnalyze the following candidate resume against the job title and requirements.\n\nJob Title: ${job_title}\nJob Requirements: ${job_requirements.join(\", \")}\n\nCandidate Resume:\n\"\"\"\n${resume_text}\n\"\"\"\n\nReturn ONLY valid JSON (no markdown, no code fences, no extra text) in EXACTLY this format:\n{\n  \"skills\": [],\n  \"experience_years\": 0,\n  \"education\": \"\",\n  \"strengths\": [],\n  \"weaknesses\": [],\n  \"suitability\": \"High/Medium/Low\",\n  \"analysis_summary\": \"\"\n}`;\n\nreturn [\n  {\n    json: {\n      candidate_name,\n      email,\n      resume_text,\n      job_title,\n      job_requirements,\n      geminiPrompt\n    }\n  }\n];"
+      },
+      "id": "feae395b-41de-4c12-804e-07a33690d090",
+      "name": "Prepare Candidate & Job Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"contents\": [ { \"parts\": [ { \"text\": $json.geminiPrompt } ] } ], \"generationConfig\": { \"temperature\": 0.2, \"responseMimeType\": \"application/json\" } } }}",
+        "options": {}
+      },
+      "id": "2c3a19c5-95d2-4678-b8ae-2d471d3f2f1e",
+      "name": "Gemini AI Resume Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "notes": "Set the GEMINI_API_KEY environment variable in your n8n instance before running. No credential ID is embedded here by design."
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nlet rawText = \"\";\ntry {\n  rawText = item.candidates[0].content.parts[0].text;\n} catch (e) {\n  rawText = typeof item === \"string\" ? item : JSON.stringify(item);\n}\n\nfunction extractJson(text) {\n  if (!text || typeof text !== \"string\") return null;\n\n  let cleaned = text.trim();\n\n  cleaned = cleaned.replace(/```json/gi, \"\").replace(/```/g, \"\").trim();\n\n  try {\n    return JSON.parse(cleaned);\n  } catch (e) {\n    // fall through to brace extraction\n  }\n\n  const firstBrace = cleaned.indexOf(\"{\");\n  const lastBrace = cleaned.lastIndexOf(\"}\");\n\n  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {\n    const candidateJson = cleaned.substring(firstBrace, lastBrace + 1);\n    try {\n      return JSON.parse(candidateJson);\n    } catch (e2) {\n      // fall through\n    }\n  }\n\n  return null;\n}\n\nlet parsed = extractJson(rawText);\n\nif (!parsed) {\n  parsed = {\n    skills: [],\n    experience_years: 0,\n    education: \"\",\n    strengths: [],\n    weaknesses: [],\n    suitability: \"Low\",\n    analysis_summary: \"AI response could not be parsed. Raw response: \" + String(rawText).substring(0, 500)\n  };\n}\n\nparsed.skills = Array.isArray(parsed.skills) ? parsed.skills : [];\nparsed.experience_years = Number(parsed.experience_years) || 0;\nparsed.education = typeof parsed.education === \"string\" ? parsed.education : \"\";\nparsed.strengths = Array.isArray(parsed.strengths) ? parsed.strengths : [];\nparsed.weaknesses = Array.isArray(parsed.weaknesses) ? parsed.weaknesses : [];\nparsed.suitability = [\"High\", \"Medium\", \"Low\"].includes(parsed.suitability) ? parsed.suitability : \"Low\";\nparsed.analysis_summary = typeof parsed.analysis_summary === \"string\" ? parsed.analysis_summary : \"\";\n\nconst prepared = $node[\"Prepare Candidate & Job Data\"].json;\n\nreturn [\n  {\n    json: {\n      candidate_name: prepared.candidate_name,\n      email: prepared.email,\n      job_title: prepared.job_title,\n      job_requirements: prepared.job_requirements,\n      ai_analysis: parsed\n    }\n  }\n];"
+      },
+      "id": "71543fb2-52db-495e-9073-9c2d09657ecd",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst jobRequirements = Array.isArray(item.job_requirements) ? item.job_requirements : [];\nconst candidateSkills = Array.isArray(item.ai_analysis.skills) ? item.ai_analysis.skills : [];\n\nconst normalize = (s) => String(s).trim().toLowerCase();\n\nconst normalizedCandidateSkills = candidateSkills.map(normalize);\nconst normalizedJobRequirements = jobRequirements.map(normalize);\n\nconst matched_skills = [];\nconst missing_skills = [];\n\nnormalizedJobRequirements.forEach((req, index) => {\n  const isMatch = normalizedCandidateSkills.some((skill) =>\n    skill.includes(req) || req.includes(skill)\n  );\n  if (isMatch) {\n    matched_skills.push(jobRequirements[index]);\n  } else {\n    missing_skills.push(jobRequirements[index]);\n  }\n});\n\nconst skill_match_percentage = normalizedJobRequirements.length > 0\n  ? Math.round((matched_skills.length / normalizedJobRequirements.length) * 100)\n  : 0;\n\nreturn [\n  {\n    json: {\n      ...item,\n      matched_skills,\n      missing_skills,\n      skill_match_percentage\n    }\n  }\n];"
+      },
+      "id": "15bc4a5e-14de-4688-82b0-9d5c36f95452",
+      "name": "Job Skill Matching",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst skill_match_percentage = Number(item.skill_match_percentage) || 0;\nconst experience_years = Number(item.ai_analysis.experience_years) || 0;\nconst education = String(item.ai_analysis.education || \"\").toLowerCase();\nconst suitability = item.ai_analysis.suitability || \"Low\";\n\nconst skillScore = Math.round((skill_match_percentage / 100) * 50);\n\nlet experienceScore = 0;\nif (experience_years >= 5) {\n  experienceScore = 20;\n} else if (experience_years >= 3) {\n  experienceScore = 15;\n} else if (experience_years >= 1) {\n  experienceScore = 10;\n} else if (experience_years > 0) {\n  experienceScore = 5;\n}\n\nlet educationScore = 0;\nif (education.includes(\"phd\") || education.includes(\"doctorate\")) {\n  educationScore = 10;\n} else if (education.includes(\"master\")) {\n  educationScore = 8;\n} else if (education.includes(\"bachelor\") || education.includes(\"degree\")) {\n  educationScore = 6;\n} else if (education.includes(\"diploma\") || education.includes(\"certificate\")) {\n  educationScore = 4;\n} else if (education.length > 0) {\n  educationScore = 2;\n}\n\nlet suitabilityScore = 0;\nif (suitability === \"High\") {\n  suitabilityScore = 20;\n} else if (suitability === \"Medium\") {\n  suitabilityScore = 10;\n} else {\n  suitabilityScore = 0;\n}\n\nconst candidate_score = skillScore + experienceScore + educationScore + suitabilityScore;\n\nreturn [\n  {\n    json: {\n      ...item,\n      score_breakdown: {\n        skill_score: skillScore,\n        experience_score: experienceScore,\n        education_score: educationScore,\n        suitability_score: suitabilityScore\n      },\n      candidate_score\n    }\n  }\n];"
+      },
+      "id": "1b864091-1f4f-4604-b6eb-1bb97b95e096",
+      "name": "Candidate Scoring",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst candidate_score = Number(item.candidate_score) || 0;\n\nlet recommendation;\nif (candidate_score >= 80) {\n  recommendation = \"Shortlist\";\n} else if (candidate_score >= 50) {\n  recommendation = \"Review\";\n} else {\n  recommendation = \"Reject\";\n}\n\nreturn [\n  {\n    json: {\n      candidate_name: item.candidate_name || \"\",\n      email: item.email || \"\",\n      job_title: item.job_title || \"\",\n      skills: Array.isArray(item.ai_analysis.skills) ? item.ai_analysis.skills : [],\n      experience_years: Number(item.ai_analysis.experience_years) || 0,\n      education: item.ai_analysis.education || \"\",\n      matched_skills: item.matched_skills || [],\n      missing_skills: item.missing_skills || [],\n      skill_match_percentage: item.skill_match_percentage || 0,\n      candidate_score: candidate_score,\n      recommendation: recommendation,\n      analysis_summary: item.ai_analysis.analysis_summary || \"\"\n    }\n  }\n];"
+      },
+      "id": "b6e15628-50b6-4841-ab27-bb52f48d71b6",
+      "name": "Final Candidate Profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Candidates",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "candidate_name": "={{ $json.candidate_name }}",
+            "email": "={{ $json.email }}",
+            "skills": "={{ $json.skills.join(', ') }}",
+            "experience_years": "={{ $json.experience_years }}",
+            "education": "={{ $json.education }}",
+            "matched_skills": "={{ $json.matched_skills.join(', ') }}",
+            "missing_skills": "={{ $json.missing_skills.join(', ') }}",
+            "skill_match_percentage": "={{ $json.skill_match_percentage }}",
+            "candidate_score": "={{ $json.candidate_score }}",
+            "recommendation": "={{ $json.recommendation }}",
+            "analysis_summary": "={{ $json.analysis_summary }}",
+            "job_title": "={{ $json.job_title}} "
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "candidate_name",
+              "displayName": "candidate_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "skills",
+              "displayName": "skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "experience_years",
+              "displayName": "experience_years",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "education",
+              "displayName": "education",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "matched_skills",
+              "displayName": "matched_skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_skills",
+              "displayName": "missing_skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "skill_match_percentage",
+              "displayName": "skill_match_percentage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "candidate_score",
+              "displayName": "candidate_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recommendation",
+              "displayName": "recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "analysis_summary",
+              "displayName": "analysis_summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "ade732d3-4c0e-4b89-b4a1-797fc6e9ea41",
+      "name": "Save Candidate to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        16,
+        240
+      ],
+      "notes": "Connect your Google Sheets OAuth2 credential manually. Replace YOUR_GOOGLE_SHEET_ID with your actual Sheet ID."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.recommendation }}",
+                    "rightValue": "Shortlist",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "9cc2692d-ae8e-4150-b413-883b98959a1e"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.recommendation }}",
+                    "rightValue": "Review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "3436ebc6-4895-4909-8642-46f17c6a04cd"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.recommendation }}",
+                    "rightValue": "Reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "3c16be1c-df01-41cf-9a36-0a50532d20be"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc3bf84a-af7b-433d-b94d-325b8fd148df",
+      "name": "Route Candidate by Recommendation",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        240,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ \"Congratulations \" + $json.candidate_name + \" - You've Been Shortlisted for \" + $json.job_title }}",
+        "message": "=\"Dear \" + $json.candidate_name + \",<br><br>\" +\n\"Congratulations! You have been shortlisted for the \" + $json.job_title + \" position.<br><br>\" +\n\"Overall Score: \" + $json.candidate_score + \"/100<br><br>\" +\n\"Matched Skills: \" + $json.matched_skills.join(\", \") + \"<br><br>\" +\n\"Our team will contact you shortly with interview details.<br><br>\" +\n\"Best regards,<br>HireFlow AI Recruitment Team\"",
+        "options": {}
+      },
+      "id": "e30f4769-2779-44da-86e4-fe4422bde12e",
+      "name": "Send Shortlist Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        656,
+        256
+      ],
+      "notes": "Connect your Gmail OAuth2 credential manually."
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list"
+        },
+        "start": "={{ $now.plus({ days: 5 }).set({ hour: 11, minute: 0, second: 0 }).toISO() }}",
+        "end": "={{ $now.plus({ days: 5 }).set({ hour: 11, minute: 30, second: 0 }).toISO() }}",
+        "additionalFields": {
+          "attendees": [
+            "={{ $json.email }}"
+          ],
+          "description": "=Interview scheduled for {{ $json.candidate_name }} ({{ $json.email }}) for the role of {{ $json.job_title }}.\\n\\nAI Match Score: {{ $json.candidate_score }}/100\\nMatched Skills: {{ $json.matched_skills.join(', ') }}",
+          "summary": "={{ \"Interview: \" + $json.candidate_name + \" - \" + $json.job_title }}"
+        }
+      },
+      "id": "1d33eb26-79c7-40b9-8c40-8964c0fd4236",
+      "name": "Create Interview Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        896,
+        240
+      ],
+      "notes": "Connect your Google Calendar OAuth2 credential manually. Placeholder: schedules interview 5 days from now at 11:00 AM. Adjust as needed."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ \"Interview Confirmation - \" + $json.job_title }}",
+        "message": "=Dear {{ $json.candidate_name }},<br><br>This confirms your interview has been scheduled for the <strong>{{ $json.job_title }}</strong> position. A calendar invite has been sent to this email address with the date, time, and meeting details.<br><br>Please reach out if you need to reschedule.<br><br>Best regards,<br>HireFlow AI Recruitment Team",
+        "options": {}
+      },
+      "id": "997122e9-7b64-4033-9843-1b317cff69a2",
+      "name": "Send Interview Confirmation",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1152,
+        208
+      ],
+      "notes": "Connect your Gmail OAuth2 credential manually."
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "fe54736a-c811-4226-942a-806d33606a20",
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1392,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ \"Follow-Up: Your Upcoming Interview for \" + $json.job_title }}",
+        "message": "=Dear {{ $json.candidate_name }},<br><br>This is a friendly reminder regarding your upcoming interview for the <strong>{{ $json.job_title }}</strong> position. Please make sure to check your calendar invite for the exact date and time.<br><br>If you have any questions or need to reschedule, feel free to reply to this email.<br><br>We look forward to speaking with you.<br><br>Best regards,<br>HireFlow AI Recruitment Team",
+        "options": {}
+      },
+      "id": "0189f86c-7749-4a08-bb91-960adb694ca0",
+      "name": "Send Follow-Up Reminder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1600,
+        208
+      ],
+      "notes": "Connect your Gmail OAuth2 credential manually."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ \"Application Update - \" + $json.job_title }}",
+        "message": "=Dear {{ $json.candidate_name }},<br><br>Thank you for applying for the <strong>{{ $json.job_title }}</strong> position. We wanted to let you know that your application is currently <strong>under review</strong> by our hiring team.<br><br>We will notify you as soon as a decision has been made regarding the next steps.<br><br>Thank you for your patience.<br><br>Best regards,<br>HireFlow AI Recruitment Team",
+        "options": {}
+      },
+      "id": "7af3e62e-23f4-42fe-a0f1-29d15edd900d",
+      "name": "Send Review Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        416
+      ],
+      "notes": "Connect your Gmail OAuth2 credential manually."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ \"Application Update - \" + $json.job_title }}",
+        "message": "=Dear {{ $json.candidate_name }},<br><br>Thank you for taking the time to apply for the <strong>{{ $json.job_title }}</strong> position and for sharing your experience with us.<br><br>After careful review, we have decided to move forward with other candidates whose qualifications more closely match our current requirements. This decision is not a reflection of your abilities, and we encourage you to apply for future opportunities with us.<br><br>We wish you the best in your job search and future endeavors.<br><br>Best regards,<br>HireFlow AI Recruitment Team",
+        "options": {}
+      },
+      "id": "4072cb7f-68ea-41ec-a2a3-3242f3657d3c",
+      "name": "Send Rejection Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        608
+      ],
+      "notes": "Connect your Gmail OAuth2 credential manually."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Input Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Candidate & Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Candidate & Job Data": {
+      "main": [
+        [
+          {
+            "node": "Gemini AI Resume Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini AI Resume Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Job Skill Matching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Skill Matching": {
+      "main": [
+        [
+          {
+            "node": "Candidate Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Candidate Scoring": {
+      "main": [
+        [
+          {
+            "node": "Final Candidate Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Candidate to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Route Candidate by Recommendation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Candidate by Recommendation": {
+      "main": [
+        [
+          {
+            "node": "Send Shortlist Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Interview Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Interview Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Follow-Up Reminder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait 2 Days",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Rejection Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Shortlist Email": {
+      "main": [
+        []
+      ]
+    },
+    "Create Interview Event": {
+      "main": [
+        []
+      ]
+    },
+    "Send Interview Confirmation": {
+      "main": [
+        []
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        []
+      ]
+    },
+    "Final Candidate Profile": {
+      "main": [
+        [
+          {
+            "node": "Save Candidate to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "bdbb27c9-9c0f-4076-8be9-06859ec9e079",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fa614eb2e11ab21ef260bfedd2b140c44ae8b7cf9c57865a4d3ecae0020e02e2"
+  },
+  "id": "B4d7f53gCcHy6hnB",
+  "tags": []
+}
